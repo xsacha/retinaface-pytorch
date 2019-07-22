@@ -19,88 +19,16 @@ def cpu_nms_wrapper(thresh):
 def anchors_plane(feat_h, feat_w, stride, base_anchor):
     return anchors_cython(feat_h, feat_w, stride, base_anchor)
 
-def generate_anchors(base_size=16, ratios=[0.5, 1, 2],
-                     scales=2 ** np.arange(3, 6), stride=16, dense_anchor=False):
-
-    base_anchor = np.array([1, 1, base_size, base_size]) - 1
-    ratio_anchors = _ratio_enum(base_anchor, ratios)
-    anchors = np.vstack([_scale_enum(ratio_anchors[i, :], scales)
-                         for i in range(ratio_anchors.shape[0])])
-    if dense_anchor:
-        assert stride%2==0
-        anchors2 = anchors.copy()
-        anchors2[:,:] += int(stride/2)
-        anchors = np.vstack( (anchors, anchors2) )
-    
-    return anchors
-
-def clip_boxes(boxes, im_shape):
-    boxes[:, 0::4] = np.maximum(np.minimum(boxes[:, 0::4], im_shape[1] - 1), 0)
-    boxes[:, 1::4] = np.maximum(np.minimum(boxes[:, 1::4], im_shape[0] - 1), 0)
-    boxes[:, 2::4] = np.maximum(np.minimum(boxes[:, 2::4], im_shape[1] - 1), 0)
-    boxes[:, 3::4] = np.maximum(np.minimum(boxes[:, 3::4], im_shape[0] - 1), 0)
-    return boxes
-
-def _whctrs(anchor):
-    w = anchor[2] - anchor[0] + 1
-    h = anchor[3] - anchor[1] + 1
-    x_ctr = anchor[0] + 0.5 * (w - 1)
-    y_ctr = anchor[1] + 0.5 * (h - 1)
-    return w, h, x_ctr, y_ctr
-
-
-def _mkanchors(ws, hs, x_ctr, y_ctr):
-    ws = ws[:, np.newaxis]
-    hs = hs[:, np.newaxis]
-    anchors = np.hstack((x_ctr - 0.5 * (ws - 1),
-                         y_ctr - 0.5 * (hs - 1),
-                         x_ctr + 0.5 * (ws - 1),
-                         y_ctr + 0.5 * (hs - 1)))
-    return anchors
-
-
-def _ratio_enum(anchor, ratios):
-    w, h, x_ctr, y_ctr = _whctrs(anchor)
-    size = w * h
-    size_ratios = size / ratios
-    ws = np.round(np.sqrt(size_ratios))
-    hs = np.round(ws * ratios)
-    anchors = _mkanchors(ws, hs, x_ctr, y_ctr)
-    return anchors
-
-
-def _scale_enum(anchor, scales):
-    w, h, x_ctr, y_ctr = _whctrs(anchor)
-    ws = w * scales
-    hs = h * scales
-    anchors = _mkanchors(ws, hs, x_ctr, y_ctr)
-    return anchors
-
-
-def generate_anchors_fpn(dense_anchor=False, cfg = None):
-    _ratio = (1.,)
-    cfg = {
-            '32': {'SCALES': (32,16), 'BASE_SIZE': 16, 'RATIOS': _ratio, 'ALLOWED_BORDER': 9999},
-            '16': {'SCALES': (8,4), 'BASE_SIZE': 16, 'RATIOS': _ratio, 'ALLOWED_BORDER': 9999},
-            '8': {'SCALES': (2,1), 'BASE_SIZE': 16, 'RATIOS': _ratio, 'ALLOWED_BORDER': 9999},
-        }
-
-    RPN_FEAT_STRIDE = []
-    
-    for k in cfg:
-      RPN_FEAT_STRIDE.append( int(k) )
-    
-    RPN_FEAT_STRIDE = sorted(RPN_FEAT_STRIDE, reverse=True)
-    
+def generate_anchors_fpn(cfg = None):
     anchors = []
-    for k in RPN_FEAT_STRIDE:
-        v = cfg[str(k)]
-        bs = v['BASE_SIZE']
-        __ratios = np.array(v['RATIOS'])
-        __scales = np.array(v['SCALES'])
-        stride = int(k)
-        r = generate_anchors(bs, __ratios, __scales, stride, dense_anchor)
-        anchors.append(r)
+    for k in cfg:
+        scale_factor = 32 / k
+        scales = np.array([k / scale_factor, k / (scale_factor * 2)])
+        scales = scales[:,np.newaxis]
+        left = 0.5 * 16 * (1 - scales)
+        right = 0.5 * 16 * (1 + scales) - 1
+        anchor = np.hstack((left, left, right, right))
+        anchors.append(anchor.astype(np.float32))
 
     return anchors
 
@@ -142,25 +70,14 @@ class RetinaFace_Utils:
         self.fpn_keys = []
         self.anchor_cfg = None
         self.preprocess = False
-        _ratio = (1.,)
 
         self._feat_stride_fpn = [32, 16, 8]
-        self.anchor_cfg = {
-            '32' : {'SCALES' : (32, 16), 'BASE_SIZE' : 16, 'RATIOS': _ratio, 'ALLOWED_BORDER': 9999},
-          '16': {'SCALES': (8,4), 'BASE_SIZE': 16, 'RATIOS': _ratio, 'ALLOWED_BORDER': 9999},
-          '8': {'SCALES': (2,1), 'BASE_SIZE': 16, 'RATIOS': _ratio, 'ALLOWED_BORDER': 9999},
-        }
-
         for s in self._feat_stride_fpn:
             self.fpn_keys.append('stride%s'%s)
-        
-        dense_anchor = False
-        self._anchors_fpn = dict(zip(self.fpn_keys, generate_anchors_fpn(dense_anchor=dense_anchor, cfg=self.anchor_cfg)))
-        for k in self._anchors_fpn:
-            v = self._anchors_fpn[k].astype(np.float32)
-            self._anchors_fpn[k] = v
 
-        self._num_anchors = dict(zip(self.fpn_keys, [anchors.shape[0] for anchors in self._anchors_fpn.values()]))
+        self._anchors_fpn = dict(zip(self.fpn_keys, generate_anchors_fpn(cfg=self._feat_stride_fpn)))
+
+        self._num_anchors = 2 #dict(zip(self.fpn_keys, [anchors.shape[0] for anchors in self._anchors_fpn.values()]))
         self.nms = cpu_nms_wrapper(self.nms_threshold)
         self.use_landmarks = True
 
@@ -179,28 +96,25 @@ class RetinaFace_Utils:
                 idx = idx*2
 
             scores = output[idx].cpu().detach().numpy()
-            scores = scores[: , self._num_anchors['stride%s'%s]:, :, :]
+            scores = scores[: , 2:, :, :]
 
             idx += 1
             bbox_deltas = output[idx].cpu().detach().numpy()
 
             height, width = bbox_deltas.shape[2], bbox_deltas.shape[3]
 
-            A = self._num_anchors['stride%s'%s]
+            A = 2 #self._num_anchors['stride%s'%s]
             K = height * width
             anchors_fpn = self._anchors_fpn['stride%s'%s]
             anchors = anchors_plane(height, width, stride, anchors_fpn)
             anchors = anchors.reshape((K * A, 4))
-            scores = self._clip_pad(scores, (height, width))
             scores = scores.transpose((0, 2, 3, 1)).reshape((-1, 1))
 
-            bbox_deltas = self._clip_pad(bbox_deltas, (height, width))
             bbox_deltas = bbox_deltas.transpose((0, 2, 3, 1))
             bbox_pred_len = bbox_deltas.shape[3]//A
             bbox_deltas = bbox_deltas.reshape((-1, bbox_pred_len))
 
             proposals = self.bbox_pred(anchors, bbox_deltas)
-            proposals = clip_boxes(proposals, (img.shape[2], img.shape[3]))
 
             scores_ravel = scores.ravel()
             order = np.where(scores_ravel>=threshold)[0]
@@ -217,7 +131,6 @@ class RetinaFace_Utils:
             if not self.vote and self.use_landmarks:
                 idx+=1
                 landmark_deltas = output[idx].cpu().detach().numpy()
-                landmark_deltas = self._clip_pad(landmark_deltas, (height, width))
                 landmark_pred_len = landmark_deltas.shape[1]//A
                 landmark_deltas = landmark_deltas.transpose((0, 2, 3, 1)).reshape((-1, 5, landmark_pred_len//5))
                 landmarks = self.landmark_pred(anchors, landmark_deltas)
@@ -252,17 +165,6 @@ class RetinaFace_Utils:
             det = self.bbox_vote(det)
         return det, landmarks
 
-
-    @staticmethod
-    def _clip_pad(tensor, pad_shape):
-        H, W = tensor.shape[2:]
-        h, w = pad_shape
-
-        if h < H or w < W:
-            tensor = tensor[:, :, :h, :w].copy()
-
-        return tensor
-
     @staticmethod
     def bbox_pred(boxes, box_deltas):
         if boxes.shape[0] == 0:
@@ -274,21 +176,21 @@ class RetinaFace_Utils:
         ctr_x = boxes[:, 0] + 0.5 * (widths - 1.0)
         ctr_y = boxes[:, 1] + 0.5 * (heights - 1.0)
 
-        dx = box_deltas[:, 0:1]
-        dy = box_deltas[:, 1:2]
-        dw = box_deltas[:, 2:3]
-        dh = box_deltas[:, 3:4]
+        dx = box_deltas[:, 0]
+        dy = box_deltas[:, 1]
+        dw = box_deltas[:, 2]
+        dh = box_deltas[:, 3]
 
-        pred_ctr_x = dx * widths[:, np.newaxis] + ctr_x[:, np.newaxis]
-        pred_ctr_y = dy * heights[:, np.newaxis] + ctr_y[:, np.newaxis]
-        pred_w = np.exp(dw) * widths[:, np.newaxis]
-        pred_h = np.exp(dh) * heights[:, np.newaxis]
+        pred_ctr_x = dx * widths + ctr_x
+        pred_ctr_y = dy * heights + ctr_y
+        pred_w = np.exp(dw) * widths
+        pred_h = np.exp(dh) * heights
 
         pred_boxes = np.zeros(box_deltas.shape)
-        pred_boxes[:, 0:1] = pred_ctr_x - 0.5 * (pred_w - 1.0)
-        pred_boxes[:, 1:2] = pred_ctr_y - 0.5 * (pred_h - 1.0)
-        pred_boxes[:, 2:3] = pred_ctr_x + 0.5 * (pred_w - 1.0)
-        pred_boxes[:, 3:4] = pred_ctr_y + 0.5 * (pred_h - 1.0)
+        pred_boxes[:, 0] = pred_ctr_x - 0.5 * (pred_w - 1.0)
+        pred_boxes[:, 1] = pred_ctr_y - 0.5 * (pred_h - 1.0)
+        pred_boxes[:, 2] = pred_ctr_x + 0.5 * (pred_w - 1.0)
+        pred_boxes[:, 3] = pred_ctr_y + 0.5 * (pred_h - 1.0)
 
         if box_deltas.shape[1]>4:
             pred_boxes[:,4:] = box_deltas[:,4:]
