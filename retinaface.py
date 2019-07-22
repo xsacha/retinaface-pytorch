@@ -387,7 +387,7 @@ class RetinaFace_MobileNet(nn.Module):
         detections.append(bbox8)
         detections.append(landmark8)
         
-        return detections
+        return tuple(detections)
 
 def load_retinaface_mbnet():
     net = RetinaFace_MobileNet()
