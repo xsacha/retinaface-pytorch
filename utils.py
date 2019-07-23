@@ -2,19 +2,15 @@ import numpy as np
 from cython.anchors import anchors_cython
 from cython.cpu_nms import cpu_nms
 
-
-def py_nms_wrapper(thresh):
+def nms_wrapper(thresh):
+    def _nms_c(dets):
+        return cpu_nms(dets, thresh)
     def _nms(dets):
         return nms(dets, thresh)
-    return _nms
-
-def cpu_nms_wrapper(thresh):
-    def _nms(dets):
-        return cpu_nms(dets, thresh)
     if cpu_nms is not None:
-        return _nms
+        return _nms_c
     else:
-        return py_nms_wrapper(thresh)
+        return _nms
 
 def anchors_plane(feat_h, feat_w, stride, base_anchor):
     return anchors_cython(feat_h, feat_w, stride, base_anchor)
@@ -78,7 +74,7 @@ class RetinaFace_Utils:
         self._anchors_fpn = dict(zip(self.fpn_keys, generate_anchors_fpn(cfg=self._feat_stride_fpn)))
 
         self._num_anchors = 2 #dict(zip(self.fpn_keys, [anchors.shape[0] for anchors in self._anchors_fpn.values()]))
-        self.nms = cpu_nms_wrapper(self.nms_threshold)
+        self.nms = nms_wrapper(self.nms_threshold)
         self.use_landmarks = True
 
     def detect(self, img, output, threshold=0.5, im_scale=1.0):
@@ -112,7 +108,7 @@ class RetinaFace_Utils:
             bbox_deltas = bbox_deltas.transpose((0, 2, 3, 1))
             bbox_deltas = bbox_deltas.reshape((-1, 4))
 
-            proposals = self.bbox_pred(anchors, bbox_deltas, stride)
+            proposals = self.bbox_pred(anchors, bbox_deltas)
 
             scores_ravel = scores.ravel()
             order = np.where(scores_ravel>=threshold)[0]
