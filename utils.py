@@ -96,14 +96,13 @@ class RetinaFace_Utils:
                 idx = idx*2
 
             scores = output[idx].cpu().detach().numpy()
+            bbox_deltas = output[idx+1].cpu().detach().numpy()
+            # Pull out confidence values per scale
             scores = scores[: , 2:, :, :]
-
-            idx += 1
-            bbox_deltas = output[idx].cpu().detach().numpy()
 
             height, width = bbox_deltas.shape[2], bbox_deltas.shape[3]
 
-            A = 2 #self._num_anchors['stride%s'%s]
+            A = self._num_anchors
             K = height * width
             anchors_fpn = self._anchors_fpn['stride%s'%s]
             anchors = anchors_plane(height, width, stride, anchors_fpn)
@@ -111,8 +110,7 @@ class RetinaFace_Utils:
             scores = scores.transpose((0, 2, 3, 1)).reshape((-1, 1))
 
             bbox_deltas = bbox_deltas.transpose((0, 2, 3, 1))
-            bbox_pred_len = bbox_deltas.shape[3]//A
-            bbox_deltas = bbox_deltas.reshape((-1, bbox_pred_len))
+            bbox_deltas = bbox_deltas.reshape((-1, 4))
 
             proposals = self.bbox_pred(anchors, bbox_deltas)
 
@@ -129,8 +127,7 @@ class RetinaFace_Utils:
             scores_list.append(scores)
 
             if not self.vote and self.use_landmarks:
-                idx+=1
-                landmark_deltas = output[idx].cpu().detach().numpy()
+                landmark_deltas = output[idx+2].cpu().detach().numpy()
                 landmark_pred_len = landmark_deltas.shape[1]//A
                 landmark_deltas = landmark_deltas.transpose((0, 2, 3, 1)).reshape((-1, 5, landmark_pred_len//5))
                 landmarks = self.landmark_pred(anchors, landmark_deltas)
@@ -176,21 +173,16 @@ class RetinaFace_Utils:
         ctr_x = boxes[:, 0] + 0.5 * (widths - 1.0)
         ctr_y = boxes[:, 1] + 0.5 * (heights - 1.0)
 
-        dx = box_deltas[:, 0]
-        dy = box_deltas[:, 1]
-        dw = box_deltas[:, 2]
-        dh = box_deltas[:, 3]
-
-        pred_ctr_x = dx * widths + ctr_x
-        pred_ctr_y = dy * heights + ctr_y
-        pred_w = np.exp(dw) * widths
-        pred_h = np.exp(dh) * heights
+        pred_ctr_x = box_deltas[:, 0] * widths + ctr_x
+        pred_ctr_y = box_deltas[:, 1] * heights + ctr_y
+        pred_w = np.exp(box_deltas[:, 2]) * widths - 1.0
+        pred_h = np.exp(box_deltas[:, 3]) * heights - 1.0
 
         pred_boxes = np.zeros(box_deltas.shape)
-        pred_boxes[:, 0] = pred_ctr_x - 0.5 * (pred_w - 1.0)
-        pred_boxes[:, 1] = pred_ctr_y - 0.5 * (pred_h - 1.0)
-        pred_boxes[:, 2] = pred_ctr_x + 0.5 * (pred_w - 1.0)
-        pred_boxes[:, 3] = pred_ctr_y + 0.5 * (pred_h - 1.0)
+        pred_boxes[:, 0] = pred_ctr_x - 0.5 * pred_w
+        pred_boxes[:, 1] = pred_ctr_y - 0.5 * pred_h
+        pred_boxes[:, 2] = pred_ctr_x + 0.5 * pred_w
+        pred_boxes[:, 3] = pred_ctr_y + 0.5 * pred_h
 
         if box_deltas.shape[1]>4:
             pred_boxes[:,4:] = box_deltas[:,4:]
