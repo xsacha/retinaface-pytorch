@@ -22,12 +22,13 @@ def anchors_plane(feat_h, feat_w, stride, base_anchor):
 def generate_anchors_fpn(cfg = None):
     anchors = []
     for k in cfg:
-        scale_factor = 32 / k
-        scales = np.array([k / scale_factor, k / (scale_factor * 2)])
+        scales = np.array([1, 2])
         scales = scales[:,np.newaxis]
-        left = 0.5 * 16 * (1 - scales)
-        right = 0.5 * 16 * (1 + scales) - 1
-        anchor = np.hstack((left, left, right, right))
+        centre = np.array([8, 8])
+        centre = centre[:,np.newaxis]
+        # base_size / max(cfg) * k^2 / scale
+        size = (16 / 32) * k * k / (scales) - 1
+        anchor = np.hstack((centre, centre, size, size))
         anchors.append(anchor.astype(np.float32))
 
     return anchors
@@ -167,16 +168,10 @@ class RetinaFace_Utils:
         if boxes.shape[0] == 0:
             return np.zeros((0, box_deltas.shape[1]))
 
-        boxes = boxes.astype(np.float, copy=False)
-        widths = boxes[:, 2] - boxes[:, 0] + 1.0
-        heights = boxes[:, 3] - boxes[:, 1] + 1.0
-        ctr_x = boxes[:, 0] + 0.5 * (widths - 1.0)
-        ctr_y = boxes[:, 1] + 0.5 * (heights - 1.0)
-
-        pred_ctr_x = box_deltas[:, 0] * widths + ctr_x
-        pred_ctr_y = box_deltas[:, 1] * heights + ctr_y
-        pred_w = np.exp(box_deltas[:, 2]) * widths - 1.0
-        pred_h = np.exp(box_deltas[:, 3]) * heights - 1.0
+        pred_ctr_x = box_deltas[:, 0] * boxes[:, 2] + boxes[:, 0]
+        pred_ctr_y = box_deltas[:, 1] * boxes[:, 3] + boxes[:, 1]
+        pred_w = np.exp(box_deltas[:, 2]) * boxes[:, 2]
+        pred_h = np.exp(box_deltas[:, 3]) * boxes[:, 3]
 
         pred_boxes = np.zeros(box_deltas.shape)
         pred_boxes[:, 0] = pred_ctr_x - 0.5 * pred_w
@@ -193,15 +188,11 @@ class RetinaFace_Utils:
     def landmark_pred(boxes, landmark_deltas):
         if boxes.shape[0] == 0:
             return np.zeros((0, landmark_deltas.shape[1]))
-        boxes = boxes.astype(np.float, copy=False)
-        widths = boxes[:, 2] - boxes[:, 0] + 1.0
-        heights = boxes[:, 3] - boxes[:, 1] + 1.0
-        ctr_x = boxes[:, 0] + 0.5 * (widths - 1.0)
-        ctr_y = boxes[:, 1] + 0.5 * (heights - 1.0)
+
         pred = landmark_deltas.copy()
         for i in range(5):
-            pred[:,i,0] = landmark_deltas[:,i,0]*widths + ctr_x
-            pred[:,i,1] = landmark_deltas[:,i,1]*heights + ctr_y
+            pred[:,i,0] = landmark_deltas[:,i,0]*(boxes[:, 2]+1.0) + boxes[:, 0]
+            pred[:,i,1] = landmark_deltas[:,i,1]*(boxes[:, 3]+1.0) + boxes[:, 1]
         return pred
 
     def bbox_vote(self, det):
