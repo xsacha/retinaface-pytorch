@@ -30,6 +30,6 @@ def anchors_cython(int height, int width, int stride, np.ndarray[DTYPE_t, ndim=2
             for k in range(A):
                 all_anchors[ih, iw, k, 0] = base_anchors[k, 0] + sw
                 all_anchors[ih, iw, k, 1] = base_anchors[k, 1] + sh
-                all_anchors[ih, iw, k, 2] = base_anchors[k, 2]# + sw
-                all_anchors[ih, iw, k, 3] = base_anchors[k, 3]# + sh
+                all_anchors[ih, iw, k, 2] = base_anchors[k, 2]
+                all_anchors[ih, iw, k, 3] = base_anchors[k, 3]
     return all_anchors

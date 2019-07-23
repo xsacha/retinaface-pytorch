@@ -65,7 +65,6 @@ def nms(dets, thresh):
 class RetinaFace_Utils:
     def __init__(self):
         self.nms_threshold = 0.4
-        self.vote = False
         self.nocrop = False
         self.debug = False
         self.fpn_keys = []
@@ -113,7 +112,7 @@ class RetinaFace_Utils:
             bbox_deltas = bbox_deltas.transpose((0, 2, 3, 1))
             bbox_deltas = bbox_deltas.reshape((-1, 4))
 
-            proposals = self.bbox_pred(anchors, bbox_deltas)
+            proposals = self.bbox_pred(anchors, bbox_deltas, stride)
 
             scores_ravel = scores.ravel()
             order = np.where(scores_ravel>=threshold)[0]
@@ -127,7 +126,7 @@ class RetinaFace_Utils:
             proposals_list.append(proposals)
             scores_list.append(scores)
 
-            if not self.vote and self.use_landmarks:
+            if self.use_landmarks:
                 landmark_deltas = output[idx+2].cpu().detach().numpy()
                 landmark_pred_len = landmark_deltas.shape[1]//A
                 landmark_deltas = landmark_deltas.transpose((0, 2, 3, 1)).reshape((-1, 5, landmark_pred_len//5))
@@ -147,20 +146,16 @@ class RetinaFace_Utils:
         order = scores_ravel.argsort()[::-1]
         proposals = proposals[order, :]
         scores = scores[order]
-        if not self.vote and self.use_landmarks:
+        if self.use_landmarks:
             landmarks = np.vstack(landmarks_list)
             landmarks = landmarks[order].astype(np.float32, copy=False)
 
         pre_det = np.hstack((proposals[:,0:4], scores)).astype(np.float32, copy=False)
-        if not self.vote:
-            keep = self.nms(pre_det)
-            det = np.hstack( (pre_det, proposals[:,4:]) )
-            det = det[keep, :]
-            if self.use_landmarks:
-                landmarks = landmarks[keep]
-        else:
-            det = np.hstack( (pre_det, proposals[:,4:]) )
-            det = self.bbox_vote(det)
+        keep = self.nms(pre_det)
+        det = np.hstack( (pre_det, proposals[:,4:]) )
+        det = det[keep, :]
+        if self.use_landmarks:
+            landmarks = landmarks[keep]
         return det, landmarks
 
     @staticmethod
@@ -194,41 +189,3 @@ class RetinaFace_Utils:
             pred[:,i,0] = landmark_deltas[:,i,0]*(boxes[:, 2]+1.0) + boxes[:, 0]
             pred[:,i,1] = landmark_deltas[:,i,1]*(boxes[:, 3]+1.0) + boxes[:, 1]
         return pred
-
-    def bbox_vote(self, det):
-        if det.shape[0] == 0:
-            dets = np.array([[10, 10, 20, 20, 0.002]])
-            det = np.empty(shape=[0, 5])
-        while det.shape[0] > 0:
-            area = (det[:, 2] - det[:, 0] + 1) * (det[:, 3] - det[:, 1] + 1)
-            xx1 = np.maximum(det[0, 0], det[:, 0])
-            yy1 = np.maximum(det[0, 1], det[:, 1])
-            xx2 = np.minimum(det[0, 2], det[:, 2])
-            yy2 = np.minimum(det[0, 3], det[:, 3])
-            w = np.maximum(0.0, xx2 - xx1 + 1)
-            h = np.maximum(0.0, yy2 - yy1 + 1)
-            inter = w * h
-            o = inter / (area[0] + area[:] - inter)
-
-            merge_index = np.where(o >= self.nms_threshold)[0]
-            det_accu = det[merge_index, :]
-            det = np.delete(det, merge_index, 0)
-            if merge_index.shape[0] <= 1:
-                if det.shape[0] == 0:
-                    try:
-                        dets = np.row_stack((dets, det_accu))
-                    except:
-                        dets = det_accu
-                continue
-            det_accu[:, 0:4] = det_accu[:, 0:4] * np.tile(det_accu[:, -1:], (1, 4))
-            max_score = np.max(det_accu[:, 4])
-            det_accu_sum = np.zeros((1, 5))
-            det_accu_sum[:, 0:4] = np.sum(det_accu[:, 0:4],
-                                        axis=0) / np.sum(det_accu[:, -1:])
-            det_accu_sum[:, 4] = max_score
-            try:
-                dets = np.row_stack((dets, det_accu_sum))
-            except:
-                dets = det_accu_sum
-        dets = dets[0:750, :]
-        return dets
